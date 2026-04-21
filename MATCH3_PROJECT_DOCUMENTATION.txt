@@ -1,0 +1,199 @@
+﻿MATCH3 PROJECT DOCUMENTATION
+============================
+
+1) Что это за проект
+--------------------
+Это C++ прототип Match-3 в Unreal Engine 5.7.
+Сейчас реализованы:
+- поле с настраиваемым размером (по умолчанию 8x8);
+- 4 типа фишек (Red/Blue/Green/Yellow);
+- обмен только соседних фишек;
+- матч 3+ по горизонтали и вертикали;
+- каскады (удаление -> падение -> дозаполнение);
+- 2D-визуал: плоские фишки, фон поля, видимая сетка;
+- автопозиционирование камеры над полем.
+
+2) Ключевые классы и ответственность
+------------------------------------
+2.1 AMatch3GameMode
+Файлы:
+- Source/Match3/Public/Match3GameMode.h
+- Source/Match3/Private/Match3GameMode.cpp
+
+Задачи:
+- задает PlayerControllerClass = AMatch3PlayerController;
+- задает DefaultPawnClass = ASpectatorPawn;
+- если на карте нет AMatch3Grid, спавнит его в BeginPlay().
+
+Важные поля:
+- GridClass: какой класс поля спавнить;
+- AutoSpawnGridLocation: позиция спавна поля.
+
+2.2 AMatch3PlayerController
+Файлы:
+- Source/Match3/Public/Match3PlayerController.h
+- Source/Match3/Private/Match3PlayerController.cpp
+
+Задачи:
+- обрабатывает ввод мышью (drag/swipe);
+- определяет старт/конец клика (по состоянию кнопки между тиками);
+- пробует обмен через Grid->TrySwapGems() / Grid->TrySwapAt();
+- один раз выравнивает камеру над центром поля.
+
+Ключевая идея свайпа:
+- зажали ЛКМ на фишке -> сохранили старт курсора и фишку;
+- отпустили ЛКМ -> если отпустили на соседней фишке, пробуем обмен;
+- иначе берем вектор drag и выбираем ось с большим смещением;
+- получаем соседнюю клетку и пробуем обмен.
+
+2.3 AMatch3Grid
+Файлы:
+- Source/Match3/Public/Match3Grid.h
+- Source/Match3/Private/Match3Grid.cpp
+
+Это "сердце" логики.
+
+Задачи:
+- хранит логическую сетку в GridArray (TArray<FGridCell>);
+- создает и обновляет акторы фишек AMatch3Gem;
+- строит 2D-подложку и сетку (GridBackground + GridLines);
+- выполняет полный матч-цикл.
+
+Структура FGridCell:
+- GemType: логический цвет/тип;
+- GemActor: визуальный актор фишки;
+- GridPosition: координаты X/Y.
+
+Ключевые методы:
+- BeginPlay(): RebuildBoardVisual() + RebuildGridData();
+- RebuildGridData(): генерация стартового поля + спавн фишек;
+- ChooseSpawnType(): выбирает тип без мгновенного матча;
+- TrySwapAt(): пробует обмен двух соседних клеток;
+- FindAllMatches(): ищет все серии 3+ по строкам и столбцам;
+- ResolveCascades(): повторяет цикл, пока есть матчи;
+- ApplyGravity(): опускает фишки вниз по столбцам;
+- RefillEmptyCells(): заполняет пустые клетки новыми фишками.
+
+2.4 AMatch3Gem
+Файлы:
+- Source/Match3/Public/Match3Gem.h
+- Source/Match3/Private/Match3Gem.cpp
+
+Задачи:
+- визуальная фишка в мире;
+- хранит GemType и GridPosition;
+- задает цвет через dynamic material instance;
+- содержит простые анимационные helper-методы.
+
+Сейчас фишка 2D:
+- используется Plane mesh (не sphere);
+- цвет задается через параметр BaseColor в материале.
+
+2.5 EGemType
+Файл:
+- Source/Match3/Public/Match3Types.h
+
+Перечисление типов:
+- Empty, Red, Blue, Green, Yellow.
+
+
+3) Игровой цикл по шагам
+------------------------
+Шаг 1. Инициализация
+- GameMode стартует.
+- Если сетки нет, GameMode спавнит AMatch3Grid.
+- Grid строит фон/линии и создает фишки.
+
+Шаг 2. Ввод игрока
+- PlayerController отслеживает drag мышью.
+- Разрешены только соседние обмены.
+
+Шаг 3. Проверка обмена
+- Grid делает swap временно.
+- Если матчей нет -> swap откатывается.
+- Если матч есть -> запускается resolve.
+
+Шаг 4. Resolve каскада
+- FindAllMatches(): найти все matched клетки.
+- ClearCellAt(): удалить matched фишки.
+- ApplyGravity(): уронить фишки вниз.
+- RefillEmptyCells(): дозаполнить верх новыми.
+- Повторять, пока матчи не закончатся.
+
+
+4) 2D визуал и камера
+---------------------
+4.1 Визуал поля
+В AMatch3Grid:
+- GridBackground: плоскость размером поля;
+- GridLines: инстансы тонких кубов для линий сетки;
+- фишки спавнятся чуть выше фона по Z.
+
+4.2 Визуал фишек
+В AMatch3Gem:
+- Plane mesh + цвет по GemType.
+- Масштаб фишки задается от CellSize в Grid::SpawnGemActor().
+
+4.3 Камера
+В AMatch3PlayerController:
+- один раз вычисляются Bounds поля;
+- pawn ставится над центром bounds;
+- pitch берется из CameraPitch.
+
+
+5) Что можно настраивать в редакторе
+------------------------------------
+5.1 У поля (AMatch3Grid):
+- GridWidth
+- GridHeight
+- CellSize
+
+5.2 У контроллера (AMatch3PlayerController):
+- MinSwipePixels
+- CameraHeightMultiplier
+- CameraHeightOffset
+- CameraPitch
+
+5.3 У GameMode:
+- GridClass
+- AutoSpawnGridLocation
+
+
+6) Частые проблемы и диагностика
+--------------------------------
+Проблема: не виден Match3GameMode в списке.
+Проверка:
+- проект должен собираться без ошибок;
+- Unreal Editor должен быть перезапущен после сборки;
+- при сборке Editor должен быть закрыт (иначе DLL lock / LNK1104).
+
+Проблема: доска не появляется.
+Проверка:
+- World Settings -> GameMode Override = BP_Match3GameMode (или Match3GameMode);
+- в Outliner во время Play есть Match3Grid;
+- если Grid есть, но фишек нет -> смотреть логи Match3.log.
+
+Проблема: камера смотрит мимо поля.
+Проверка:
+- параметры CameraPitch/Height в PlayerController;
+- что у Grid нормальные bounds (не нулевой размер поля).
+
+
+7) Куда развивать проект дальше
+--------------------------------
+- добавить очки и UI;
+- добавить спец-фишки (4 в ряд, 5 в ряд, L/T);
+- добавить анимации удаления/падения вместо мгновенного SetActorLocation;
+- добавить уровни и цели;
+- добавить систему подсказок (hint) и проверку наличия доступных ходов;
+- добавить автоперемешивание, если ходов нет.
+
+
+8) Полезная памятка по архитектуре
+----------------------------------
+- Логика поля живет в AMatch3Grid.
+- Ввод и камера живут в AMatch3PlayerController.
+- Правила запуска уровня живут в AMatch3GameMode.
+- AMatch3Gem максимально "тонкий" визуальный объект.
+- Всегда сначала правим логику (Grid), потом визуал (Gem), потом UX (Controller).
+

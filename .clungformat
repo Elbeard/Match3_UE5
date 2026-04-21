@@ -1,0 +1,4 @@
+Language: Cpp
+BaseOnStyle: Microsoft
+SortIncludes: false
+PointerAlignement: Left

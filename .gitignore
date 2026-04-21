@@ -1,0 +1,42 @@
+﻿# Unreal Engine project
+
+# Build artifacts and generated caches
+/Binaries/
+/Intermediate/
+/DerivedDataCache/
+/Saved/
+
+# IDE / tool files
+/.vs/
+.vscode/
+.idea/
+*.sln
+*.suo
+*.user
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.opendb
+
+# Unreal generated project files
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.xcodeproj
+*.xcworkspace
+*.uproject.user
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+*.swp
+.DS_Store
+Thumbs.db
+
+# Optional packaging outputs
+/Dist/
+/NoRedist/
+
+# Optional marketplace plugin binaries/content cache
+/Plugins/Marketplace/
