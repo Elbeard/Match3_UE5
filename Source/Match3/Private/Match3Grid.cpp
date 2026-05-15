@@ -1,14 +1,26 @@
 #include "Match3Grid.h"
 
+/*
+ * Логика поля и ввод (актуальная версия):
+ * - В Tick опрашивается игрок 0: ЛКМ + line trace до фишек (стабильно при GameAndUI и видимом курсоре у Spectator).
+ * - Тюнинг: FMatch3GameplayTune и при необходимости UMatch3TunePreset (AMatch3Grid::ActiveTune).
+ * - Выделение, удержание с покачиванием, обмен кликом по соседу, свайп при отпускании ЛКМ (порог в пикселях из тюнинга).
+ */
+
 #include "Match3Gem.h"
+#include "CollisionQueryParams.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Engine/HitResult.h"
 #include "Engine/World.h"
+#include "GameFramework/PlayerController.h"
+#include "GameFramework/Pawn.h"
+#include "Kismet/GameplayStatics.h"
 #include "UObject/ConstructorHelpers.h"
 
 AMatch3Grid::AMatch3Grid()
 {
-	PrimaryActorTick.bCanEverTick = false;
+	PrimaryActorTick.bCanEverTick = true;
 
 	SceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("SceneRoot"));
 	RootComponent = SceneRoot;
@@ -34,14 +46,258 @@ AMatch3Grid::AMatch3Grid()
 	{
 		GridLines->SetStaticMesh(CubeMesh.Object);
 	}
+
+}
+
+void AMatch3Grid::OnConstruction(const FTransform& Transform)
+{
+	Super::OnConstruction(Transform);
 }
 
 void AMatch3Grid::BeginPlay()
 {
 	Super::BeginPlay();
-	// ���������� ���� ������ ������, ����� ����� ������ ����.
 	RebuildBoardVisual();
 	RebuildGridData();
+}
+
+void AMatch3Grid::Tick(float DeltaTime)
+{
+	Super::Tick(DeltaTime);
+
+	// Ввод обрабатывается здесь, а не в PlayerController — сетка всегда «видит» мышь над полем.
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	APlayerController* PC = UGameplayStatics::GetPlayerController(World, 0);
+	if (!PC)
+	{
+		return;
+	}
+
+	const bool bLeft = PC->IsInputKeyDown(EKeys::LeftMouseButton);
+
+	const bool bPressed = bLeft && !bWasLMBDownLastTick;
+	const bool bReleased = !bLeft && bWasLMBDownLastTick;
+	bWasLMBDownLastTick = bLeft;
+
+	if (!CanAcceptInput())
+	{
+		ClearMouseGesture();
+		ClearGemSelectionState();
+		return;
+	}
+
+	if (bPressed)
+	{
+		bLeftHeld = true;
+		float MX = 0.f;
+		float MY = 0.f;
+		PC->GetMousePosition(MX, MY);
+		const FVector2D Now(MX, MY);
+
+		AMatch3Gem* Gem = nullptr;
+		if (TryPickGemWithPC(PC, Gem) && Gem && !Gem->IsMoving())
+		{
+			if (SelectedGem.IsValid())
+			{
+				AMatch3Gem* Sel = SelectedGem.Get();
+				if (Gem == Sel)
+				{
+					Gem->SetSelectionPressActive(true);
+					bPressActive = true;
+					PressScreenPos = Now;
+					DraggedGem = Gem;
+				}
+				else if (Manhattan(Sel->GetGridPosition(), Gem->GetGridPosition()) == 1)
+				{
+					Sel->SetSelectionPressActive(false);
+					Sel->SetSelected(false);
+					SelectedGem = nullptr;
+					DraggedGem = nullptr;
+					bPressActive = false;
+					TrySwapGems(Sel, Gem);
+				}
+				else
+				{
+					Sel->SetSelectionPressActive(false);
+					Sel->SetSelected(false);
+					Gem->SetSelected(true);
+					SelectedGem = Gem;
+					Gem->SetSelectionPressActive(true);
+					bPressActive = true;
+					PressScreenPos = Now;
+					DraggedGem = Gem;
+				}
+			}
+			else
+			{
+				Gem->SetSelected(true);
+				SelectedGem = Gem;
+				Gem->SetSelectionPressActive(true);
+				bPressActive = true;
+				PressScreenPos = Now;
+				DraggedGem = Gem;
+			}
+		}
+		else
+		{
+			if (SelectedGem.IsValid())
+			{
+				if (AMatch3Gem* S = SelectedGem.Get())
+				{
+					S->SetSelectionPressActive(false);
+					S->SetSelected(false);
+				}
+				SelectedGem = nullptr;
+			}
+			if (DraggedGem.IsValid())
+			{
+				if (AMatch3Gem* D = DraggedGem.Get())
+				{
+					D->SetSelectionPressActive(false);
+				}
+			}
+			DraggedGem = nullptr;
+			bPressActive = false;
+		}
+	}
+
+	if (bReleased)
+	{
+		bLeftHeld = false;
+
+		if (bPressActive)
+		{
+			AMatch3Gem* FromGem = DraggedGem.Get();
+			if (FromGem)
+			{
+				FromGem->SetSelectionPressActive(false);
+			}
+			bPressActive = false;
+			DraggedGem = nullptr;
+
+			if (FromGem && !FromGem->IsMoving() && SelectedGem.Get() == FromGem)
+			{
+				float MX = 0.f;
+				float MY = 0.f;
+				PC->GetMousePosition(MX, MY);
+				const FVector2D Now(MX, MY);
+				const FVector2D Drag = Now - PressScreenPos;
+
+				if (Drag.Size() >= ActiveTune().InputMinSwipePixels)
+				{
+					FIntPoint From = FromGem->GetGridPosition();
+					FIntPoint Delta(0, 0);
+					if (FMath::Abs(Drag.X) >= FMath::Abs(Drag.Y))
+					{
+						Delta.X = Drag.X > 0.f ? 1 : -1;
+					}
+					else
+					{
+						Delta.Y = Drag.Y > 0.f ? 1 : -1;
+					}
+					TrySwapAt(From, From + Delta);
+				}
+			}
+		}
+	}
+}
+
+void AMatch3Grid::ClearGemSelectionState()
+{
+	if (SelectedGem.IsValid())
+	{
+		if (AMatch3Gem* G = SelectedGem.Get())
+		{
+			G->SetSelectionPressActive(false);
+			G->SetSelected(false);
+		}
+	}
+	SelectedGem = nullptr;
+	if (DraggedGem.IsValid())
+	{
+		if (AMatch3Gem* D = DraggedGem.Get())
+		{
+			D->SetSelectionPressActive(false);
+		}
+	}
+	DraggedGem = nullptr;
+	bPressActive = false;
+}
+
+FMatch3GameplayTune AMatch3Grid::GetResolvedTune() const
+{
+	return ActiveTune();
+}
+
+void AMatch3Grid::ClearMouseGesture()
+{
+	if (AMatch3Gem* G = DraggedGem.Get())
+	{
+		G->SetSelectionPressActive(false);
+	}
+	DraggedGem = nullptr;
+	bPressActive = false;
+	bLeftHeld = false;
+}
+
+bool AMatch3Grid::TryPickGemWithPC(APlayerController* PC, AMatch3Gem*& OutGem)
+{
+	OutGem = nullptr;
+	if (!PC)
+	{
+		return false;
+	}
+
+	UWorld* W = GetWorld();
+	if (!W)
+	{
+		return false;
+	}
+
+	FHitResult Hit;
+	if (PC->GetHitResultUnderCursor(ECC_Visibility, true, Hit))
+	{
+		if (AMatch3Gem* Gem = Cast<AMatch3Gem>(Hit.GetActor()))
+		{
+			OutGem = Gem;
+			return true;
+		}
+	}
+
+	FVector WorldOrigin;
+	FVector WorldDirection;
+	if (!PC->DeprojectMousePositionToWorld(WorldOrigin, WorldDirection))
+	{
+		return false;
+	}
+
+	const FVector TraceEnd = WorldOrigin + WorldDirection * ActiveTune().PickLineTraceLengthUU;
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(Match3GridPickGem), true);
+	if (APawn* Pawn = PC->GetPawn())
+	{
+		Params.AddIgnoredActor(Pawn);
+	}
+
+	TArray<FHitResult> Hits;
+	if (W->LineTraceMultiByChannel(Hits, WorldOrigin, TraceEnd, ECC_Visibility, Params))
+	{
+		for (const FHitResult& H : Hits)
+		{
+			if (AMatch3Gem* Gem = Cast<AMatch3Gem>(H.GetActor()))
+			{
+				OutGem = Gem;
+				return true;
+			}
+		}
+	}
+
+	return false;
 }
 
 FGridCell* AMatch3Grid::CellAt(int32 X, int32 Y)
@@ -74,26 +330,27 @@ const FGridCell* AMatch3Grid::CellAt(int32 X, int32 Y) const
 
 FVector AMatch3Grid::WorldLocationForCell(int32 X, int32 Y) const
 {
-	const float HalfW = GridWidth * CellSize * 0.5f;
-	const float HalfH = GridHeight * CellSize * 0.5f;
+	const float HalfW = GridW() * CellSz() * 0.5f;
+	const float HalfH = GridH() * CellSz() * 0.5f;
 	const FVector Local(
-		X * CellSize - HalfW + CellSize * 0.5f,
-		Y * CellSize - HalfH + CellSize * 0.5f,
-		6.f); // ���� ���� ����/�����, ����� �������� z-fighting.
+		X * CellSz() - HalfW + CellSz() * 0.5f,
+		Y * CellSz() - HalfH + CellSz() * 0.5f,
+		ActiveTune().GemCellZOffset);
 	return GetActorTransform().TransformPosition(Local);
 }
 
 void AMatch3Grid::RebuildBoardVisual()
 {
-	const float BoardW = GridWidth * CellSize;
-	const float BoardH = GridHeight * CellSize;
+	const FMatch3GameplayTune& T = ActiveTune();
+	const float BoardW = GridW() * CellSz();
+	const float BoardH = GridH() * CellSz();
 	const float HalfW = BoardW * 0.5f;
 	const float HalfH = BoardH * 0.5f;
 
 	if (GridBackground)
 	{
-		// Plane � UE ����� ������� ������ 100x100 uu.
-		GridBackground->SetRelativeLocation(FVector(0.f, 0.f, -4.f));
+		// Меш Plane из BasicShapes по умолчанию 100×100 uu.
+		GridBackground->SetRelativeLocation(FVector(0.f, 0.f, T.BoardBackgroundZOffset));
 		GridBackground->SetRelativeRotation(FRotator::ZeroRotator);
 		GridBackground->SetRelativeScale3D(FVector(BoardW / 100.f, BoardH / 100.f, 1.f));
 	}
@@ -102,22 +359,23 @@ void AMatch3Grid::RebuildBoardVisual()
 	{
 		GridLines->ClearInstances();
 
-		const float Thickness = FMath::Clamp(CellSize * 0.03f, 2.f, 8.f);
-		const float Z = -2.f;
+		const float Thickness = FMath::Clamp(
+			CellSz() * T.GridLineThicknessFactor,
+			T.GridLineThicknessMin,
+			T.GridLineThicknessMax);
+		const float Z = T.GridLinesZ;
 
-		// ������������ ����� �����.
-		for (int32 X = 0; X <= GridWidth; ++X)
+		for (int32 X = 0; X <= GridW(); ++X)
 		{
-			const float XPos = -HalfW + X * CellSize;
+			const float XPos = -HalfW + X * CellSz();
 			const FVector Pos(XPos, 0.f, Z);
 			const FVector Scale(Thickness / 100.f, BoardH / 100.f, Thickness / 100.f);
 			GridLines->AddInstance(FTransform(FRotator::ZeroRotator, Pos, Scale));
 		}
 
-		// �������������� ����� �����.
-		for (int32 Y = 0; Y <= GridHeight; ++Y)
+		for (int32 Y = 0; Y <= GridH(); ++Y)
 		{
-			const float YPos = -HalfH + Y * CellSize;
+			const float YPos = -HalfH + Y * CellSz();
 			const FVector Pos(0.f, YPos, Z);
 			const FVector Scale(BoardW / 100.f, Thickness / 100.f, Thickness / 100.f);
 			GridLines->AddInstance(FTransform(FRotator::ZeroRotator, Pos, Scale));
@@ -142,22 +400,22 @@ void AMatch3Grid::RebuildGridData()
 {
 	ClearAllGemActors();
 	GridArray.Reset();
-	GridArray.Reserve(GridWidth * GridHeight);
+	GridArray.Reserve(GridW() * GridH());
 
-	for (int32 Y = 0; Y < GridHeight; Y++)
+	for (int32 Y = 0; Y < GridH(); Y++)
 	{
-		for (int32 X = 0; X < GridWidth; X++)
+		for (int32 X = 0; X < GridW(); X++)
 		{
-			// ���������� ��������� ���� ��� ���������� ������.
+			// Тип, при котором не образуется «три в ряд» сразу после появления.
 			const EGemType T = ChooseSpawnType(X, Y);
 			FGridCell NewCell(T, FIntPoint(X, Y));
 			GridArray.Add(NewCell);
 		}
 	}
 
-	for (int32 Y = 0; Y < GridHeight; Y++)
+	for (int32 Y = 0; Y < GridH(); Y++)
 	{
-		for (int32 X = 0; X < GridWidth; X++)
+		for (int32 X = 0; X < GridW(); X++)
 		{
 			FGridCell* Cell = CellAt(X, Y);
 			if (!Cell)
@@ -189,12 +447,13 @@ AMatch3Gem* AMatch3Grid::SpawnGemActor(int32 X, int32 Y, EGemType Type)
 	if (Gem)
 	{
 		Gem->AttachToActor(this, FAttachmentTransformRules::KeepWorldTransform);
-		// Plane � UE ~100 uu, ������ ����� �������� 58% ������ ������.
-		const float GemDiameter = CellSize * 0.58f;
+		// Тот же Plane ~100 uu; масштаб актора из GemDiameterFractionOfCell относительно клетки.
+		const float GemDiameter = CellSz() * ActiveTune().GemDiameterFractionOfCell;
 		const float GemScale = FMath::Max(0.1f, GemDiameter / 100.f);
 		Gem->SetActorScale3D(FVector(GemScale));
 		Gem->SetGemType(Type);
 		Gem->SetGridPosition(FIntPoint(X, Y));
+		Gem->ApplyTune(GetResolvedTune());
 	}
 
 	return Gem;
@@ -213,30 +472,30 @@ bool AMatch3Grid::WouldCreateMatchIfPlaced(int32 X, int32 Y, EGemType T) const
 		return false;
 	}
 
-	// ��������� 3 ��������� ���������� �� ����������� ������ (X,Y).
+	// Даст ли размещение типа T в (X,Y) три и более подряд по горизонтали?
 	if (X >= 2 && GetGemTypeAt(X - 1, Y) == T && GetGemTypeAt(X - 2, Y) == T)
 	{
 		return true;
 	}
-	if (X >= 1 && X < GridWidth - 1 && GetGemTypeAt(X - 1, Y) == T && GetGemTypeAt(X + 1, Y) == T)
+	if (X >= 1 && X < GridW() - 1 && GetGemTypeAt(X - 1, Y) == T && GetGemTypeAt(X + 1, Y) == T)
 	{
 		return true;
 	}
-	if (X <= GridWidth - 3 && GetGemTypeAt(X + 1, Y) == T && GetGemTypeAt(X + 2, Y) == T)
+	if (X <= GridW() - 3 && GetGemTypeAt(X + 1, Y) == T && GetGemTypeAt(X + 2, Y) == T)
 	{
 		return true;
 	}
 
-	// ��������� 3 ��������� ���������� �� ��������� ������ (X,Y).
+	// Даст ли размещение типа T в (X,Y) три и более подряд по вертикали?
 	if (Y >= 2 && GetGemTypeAt(X, Y - 1) == T && GetGemTypeAt(X, Y - 2) == T)
 	{
 		return true;
 	}
-	if (Y >= 1 && Y < GridHeight - 1 && GetGemTypeAt(X, Y - 1) == T && GetGemTypeAt(X, Y + 1) == T)
+	if (Y >= 1 && Y < GridH() - 1 && GetGemTypeAt(X, Y - 1) == T && GetGemTypeAt(X, Y + 1) == T)
 	{
 		return true;
 	}
-	if (Y <= GridHeight - 3 && GetGemTypeAt(X, Y + 1) == T && GetGemTypeAt(X, Y + 2) == T)
+	if (Y <= GridH() - 3 && GetGemTypeAt(X, Y + 1) == T && GetGemTypeAt(X, Y + 2) == T)
 	{
 		return true;
 	}
@@ -312,11 +571,11 @@ void AMatch3Grid::FindAllMatches(TSet<FIntPoint>& OutCells) const
 {
 	OutCells.Reset();
 
-	// ��������� ����.
-	for (int32 Y = 0; Y < GridHeight; Y++)
+	// Горизонтальные серии из 3+ одинаковых фишек.
+	for (int32 Y = 0; Y < GridH(); Y++)
 	{
 		int32 X = 0;
-		while (X < GridWidth)
+		while (X < GridW())
 		{
 			const EGemType T = GetGemTypeAt(X, Y);
 			if (T == EGemType::Empty)
@@ -326,7 +585,7 @@ void AMatch3Grid::FindAllMatches(TSet<FIntPoint>& OutCells) const
 			}
 
 			int32 Run = 1;
-			while (X + Run < GridWidth && GetGemTypeAt(X + Run, Y) == T)
+			while (X + Run < GridW() && GetGemTypeAt(X + Run, Y) == T)
 			{
 				++Run;
 			}
@@ -342,11 +601,11 @@ void AMatch3Grid::FindAllMatches(TSet<FIntPoint>& OutCells) const
 		}
 	}
 
-	// ��������� �������.
-	for (int32 X = 0; X < GridWidth; X++)
+	// Вертикальные серии из 3+ одинаковых фишек.
+	for (int32 X = 0; X < GridW(); X++)
 	{
 		int32 Y = 0;
-		while (Y < GridHeight)
+		while (Y < GridH())
 		{
 			const EGemType T = GetGemTypeAt(X, Y);
 			if (T == EGemType::Empty)
@@ -356,7 +615,7 @@ void AMatch3Grid::FindAllMatches(TSet<FIntPoint>& OutCells) const
 			}
 
 			int32 Run = 1;
-			while (Y + Run < GridHeight && GetGemTypeAt(X, Y + Run) == T)
+			while (Y + Run < GridH() && GetGemTypeAt(X, Y + Run) == T)
 			{
 				++Run;
 			}
@@ -390,12 +649,12 @@ void AMatch3Grid::ClearCellAt(FIntPoint P)
 
 void AMatch3Grid::ApplyGravity()
 {
-	// ��� ������� ������� "��������" ����� ���� �� write-���������.
-	for (int32 X = 0; X < GridWidth; X++)
+	// Уплотнение столбца снизу вверх: указатели чтения ReadY и записи WriteY без отдельного буфера.
+	for (int32 X = 0; X < GridW(); X++)
 	{
-		int32 WriteY = GridHeight - 1;
+		int32 WriteY = GridH() - 1;
 
-		for (int32 ReadY = GridHeight - 1; ReadY >= 0; ReadY--)
+		for (int32 ReadY = GridH() - 1; ReadY >= 0; ReadY--)
 		{
 			FGridCell* From = CellAt(X, ReadY);
 			if (!From || From->GemType == EGemType::Empty)
@@ -436,9 +695,9 @@ void AMatch3Grid::ApplyGravity()
 
 void AMatch3Grid::RefillEmptyCells()
 {
-	for (int32 Y = 0; Y < GridHeight; Y++)
+	for (int32 Y = 0; Y < GridH(); Y++)
 	{
-		for (int32 X = 0; X < GridWidth; X++)
+		for (int32 X = 0; X < GridW(); X++)
 		{
 			FGridCell* C = CellAt(X, Y);
 			if (!C || C->GemType != EGemType::Empty)
@@ -455,7 +714,7 @@ void AMatch3Grid::RefillEmptyCells()
 
 void AMatch3Grid::ResolveCascades()
 {
-	// ����: ���� -> �������� -> ������� -> ������������, ���� ����� �� ��������.
+	// Цикл: матчи → очистка → гравитация → досыпание, пока на поле есть матчи.
 	while (true)
 	{
 		TSet<FIntPoint> Matches;
@@ -501,13 +760,13 @@ void AMatch3Grid::TrySwapAt(FIntPoint CellA, FIntPoint CellB)
 		return;
 	}
 
-	// ������� �����.
+	// Пробный обмен: проверяем, появятся ли матчи.
 	SwapCellContents(CellA, CellB);
 	UpdateGemWorldTransforms(CellA, CellB);
 
 	TSet<FIntPoint> Matches;
 	FindAllMatches(Matches);
-	// ���� ���� �� ���������, ���������� �����.
+	// Матчей нет — откатываем обмен.
 	if (Matches.Num() == 0)
 	{
 		SwapCellContents(CellA, CellB);
@@ -515,7 +774,9 @@ void AMatch3Grid::TrySwapAt(FIntPoint CellA, FIntPoint CellB)
 		return;
 	}
 
-	// ���� ���� ����, ��������� ������ resolve-����.
+	ClearGemSelectionState();
+
+	// Матчи есть — полное разрешение каскадов.
 	bIsResolving = true;
 	ResolveCascades();
 	bIsResolving = false;

@@ -1,4 +1,4 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+// Укажите уведомление об авторских правах на странице Description в настройках проекта.
 
 #pragma once
 
@@ -12,15 +12,15 @@ class MATCH3_API AMyActor : public AActor
 	GENERATED_BODY()
 	
 public:	
-	// Sets default values for this actor's properties
+	// Значения по умолчанию для свойств актора
 	AMyActor();
 
 protected:
-	// Called when the game starts or when spawned
+	// Вызывается при старте игры или при появлении актора в мире
 	virtual void BeginPlay() override;
 
 public:	
-	// Called every frame
+	// Вызывается каждый кадр
 	virtual void Tick(float DeltaTime) override;
 
 };

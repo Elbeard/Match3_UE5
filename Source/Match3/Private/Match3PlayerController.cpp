@@ -1,9 +1,9 @@
 #include "Match3PlayerController.h"
 
 #include "Match3Grid.h"
-#include "Match3Gem.h"
 #include "GameFramework/Pawn.h"
 #include "Kismet/GameplayStatics.h"
+#include "Engine/World.h"
 
 AMatch3PlayerController::AMatch3PlayerController()
 {
@@ -11,12 +11,24 @@ AMatch3PlayerController::AMatch3PlayerController()
 	bEnableClickEvents = true;
 	bEnableMouseOverEvents = true;
 	PrimaryActorTick.bCanEverTick = true;
+	AutoReceiveInput = EAutoReceiveInput::Player0;
 }
 
 void AMatch3PlayerController::BeginPlay()
 {
 	Super::BeginPlay();
+
+	// Фиксированный вид на доску: у Spectator по умолчанию отключаем вращение камеры мышью.
+	SetIgnoreLookInput(true);
+
+	FInputModeGameAndUI InputMode;
+	InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+	InputMode.SetHideCursorDuringCapture(false);
+	SetInputMode(InputMode);
+
 	bShowMouseCursor = true;
+	bEnableClickEvents = true;
+	bEnableMouseOverEvents = true;
 }
 
 void AMatch3PlayerController::CacheGridIfNeeded()
@@ -28,10 +40,12 @@ void AMatch3PlayerController::CacheGridIfNeeded()
 
 	if (UWorld* World = GetWorld())
 	{
-		// Находим первую сетку на уровне и кэшируем, чтобы не искать каждый кадр.
 		AMatch3Grid* Found = Cast<AMatch3Grid>(
 			UGameplayStatics::GetActorOfClass(World, AMatch3Grid::StaticClass()));
-		CachedGrid = Found;
+		if (Found)
+		{
+			CachedGrid = Found;
+		}
 	}
 }
 
@@ -55,10 +69,8 @@ void AMatch3PlayerController::PlayerTick(float DeltaTime)
 
 	CacheGridIfNeeded();
 	AMatch3Grid* Grid = ResolveGrid();
-	if (!Grid || !Grid->CanAcceptInput())
+	if (!Grid)
 	{
-		bPressActive = false;
-		PressedGem = nullptr;
 		return;
 	}
 
@@ -67,7 +79,6 @@ void AMatch3PlayerController::PlayerTick(float DeltaTime)
 		APawn* ControlledPawn = GetPawn();
 		if (ControlledPawn)
 		{
-			// Автоматически ставим камеру над полем один раз при старте.
 			FVector BoundsOrigin = FVector::ZeroVector;
 			FVector BoundsExtent = FVector::ZeroVector;
 			Grid->GetActorBounds(false, BoundsOrigin, BoundsExtent);
@@ -83,90 +94,4 @@ void AMatch3PlayerController::PlayerTick(float DeltaTime)
 			bCameraAlignedToGrid = true;
 		}
 	}
-
-	const bool bLeftDown = IsInputKeyDown(EKeys::LeftMouseButton);
-	// Считаем "нажатие" и "отпускание" вручную из состояния прошлой рамки.
-	const bool bLeftPressed = bLeftDown && !bWasLeftDownLastTick;
-	const bool bLeftReleased = !bLeftDown && bWasLeftDownLastTick;
-
-	float MX = 0.f;
-	float MY = 0.f;
-	GetMousePosition(MX, MY);
-	const FVector2D Now(MX, MY);
-
-	if (bLeftPressed)
-	{
-		// На старте drag запоминаем фишку под курсором.
-		FHitResult Hit;
-		if (GetHitResultUnderCursor(ECC_Visibility, true, Hit))
-		{
-			if (AMatch3Gem* Gem = Cast<AMatch3Gem>(Hit.GetActor()))
-			{
-				if (!Gem->IsMoving())
-				{
-					bPressActive = true;
-					PressScreenPos = Now;
-					PressedGem = Gem;
-				}
-			}
-		}
-	}
-
-	if (bPressActive && bLeftReleased)
-	{
-		bPressActive = false;
-
-		AMatch3Gem* FromGem = PressedGem.Get();
-		PressedGem = nullptr;
-		if (!FromGem)
-		{
-			return;
-		}
-
-		const FVector2D Drag = Now - PressScreenPos;
-
-		// 1) Если попали отпусканием по другой фишке и она соседняя — меняемся с ней.
-		FHitResult Hit;
-		if (GetHitResultUnderCursor(ECC_Visibility, true, Hit))
-		{
-			if (AMatch3Gem* ToGem = Cast<AMatch3Gem>(Hit.GetActor()))
-			{
-				if (ToGem != FromGem && !ToGem->IsMoving())
-				{
-					Grid->TrySwapGems(FromGem, ToGem);
-					return;
-				}
-			}
-		}
-
-		// 2) Иначе — свайп по экрану (доминирующая ось).
-		if (Drag.Size() < MinSwipePixels)
-		{
-			return;
-		}
-
-		FIntPoint From = FromGem->GetGridPosition();
-		FIntPoint Delta(0, 0);
-		if (FMath::Abs(Drag.X) >= FMath::Abs(Drag.Y))
-		{
-			Delta.X = Drag.X > 0.f ? 1 : -1;
-		}
-		else
-		{
-			// Экран: Y вниз растёт; для «свайпа вверх» Drag.Y отрицательный — двигаемся к меньшему Y в сетке.
-			Delta.Y = Drag.Y > 0.f ? 1 : -1;
-		}
-
-		const FIntPoint Target = From + Delta;
-		Grid->TrySwapAt(From, Target);
-	}
-
-	// Если отпустили кнопку вне логики выше
-	if (!bLeftDown && bPressActive)
-	{
-		bPressActive = false;
-		PressedGem = nullptr;
-	}
-
-	bWasLeftDownLastTick = bLeftDown;
 }

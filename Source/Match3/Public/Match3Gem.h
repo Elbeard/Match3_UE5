@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "Match3Config.h"
 #include "Match3Types.h"
 #include "Match3Gem.generated.h"
 
@@ -9,7 +10,7 @@ class UStaticMeshComponent;
 class USphereComponent;
 class UMaterialInstanceDynamic;
 
-/** Визуальная 2D-фишка: плоский меш + цвет по EGemType. */
+/** Визуальная 2D-фишка: плоский меш + цвет по EGemType. Параметры — из FMatch3GameplayTune родительской сетки. */
 UCLASS()
 class MATCH3_API AMatch3Gem : public AActor
 {
@@ -19,6 +20,7 @@ public:
 	AMatch3Gem();
 
 	virtual void BeginPlay() override;
+	virtual void OnConstruction(const FTransform& Transform) override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
@@ -52,6 +54,9 @@ public:
 	void SetSelected(bool bSelected);
 
 	UFUNCTION(BlueprintCallable, Category = "Gem")
+	void SetSelectionPressActive(bool bPressActive);
+
+	UFUNCTION(BlueprintCallable, Category = "Gem")
 	void SetMatched(bool bMatched);
 
 	UFUNCTION(BlueprintPure, Category = "Gem")
@@ -75,13 +80,30 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Gem")
 	void Highlight(bool bEnable);
 
+	UFUNCTION(BlueprintCallable, Category = "Gem")
+	void ApplyTune(const FMatch3GameplayTune& Tune);
+
 private:
 	void EnsureDynamicMaterial();
-	static FLinearColor ColorForGemType(EGemType InType);
+	FLinearColor ResolveGemColor(EGemType InType) const;
+	void UpdateSelectionVisual();
+	void StopSelectionAnimation();
+	void StartSelectionAnimationIfNeeded();
+	void RefreshTuneFromParentGrid();
+	void ApplyMeshVisualsFromTune();
+
+	float SelectionPhase = 0.f;
+	bool bSelectionPressActive = false;
+
+	/** Копия тюнинга с сетки (цвета, анимация, клик и т.д.). */
+	FMatch3GameplayTune GemTune;
 
 	UPROPERTY(Transient)
 	UMaterialInstanceDynamic* GemMID = nullptr;
 
+	FVector MeshBaseRelativeScale = FVector(1.f);
+
+	FTimerHandle TimerHandle_SelectionIdle;
 	FTimerHandle TimerHandle_SelectAnimation;
 	FTimerHandle TimerHandle_MoveAnimation;
 	float MoveAnimElapsed = 0.f;

@@ -34,17 +34,13 @@
 - Source/Match3/Public/Match3PlayerController.h
 - Source/Match3/Private/Match3PlayerController.cpp
 
-Задачи:
-- обрабатывает ввод мышью (drag/swipe);
-- определяет старт/конец клика (по состоянию кнопки между тиками);
-- пробует обмен через Grid->TrySwapGems() / Grid->TrySwapAt();
-- один раз выравнивает камеру над центром поля.
+Задачи (актуально на 2026-05):
+- один раз (в PlayerTick) выравнивает SpectatorPawn над центром bounds поля и выставляет CameraPitch;
+- кэширует AMatch3Grid для этого расчёта;
+- в BeginPlay: FInputModeGameAndUI + видимый курсор и SetIgnoreLookInput(true), чтобы во время игры
+  мышь не крутила камеру (Spectator по умолчанию принимает look input).
 
-Ключевая идея свайпа:
-- зажали ЛКМ на фишке -> сохранили старт курсора и фишку;
-- отпустили ЛКМ -> если отпустили на соседней фишке, пробуем обмен;
-- иначе берем вектор drag и выбираем ось с большим смещением;
-- получаем соседнюю клетку и пробуем обмен.
+Ввод мышью (клик/свайп/выбор) здесь НЕ обрабатывается: см. AMatch3Grid::Tick.
 
 2.3 AMatch3Grid
 Файлы:
@@ -57,7 +53,16 @@
 - хранит логическую сетку в GridArray (TArray<FGridCell>);
 - создает и обновляет акторы фишек AMatch3Gem;
 - строит 2D-подложку и сетку (GridBackground + GridLines);
-- выполняет полный матч-цикл.
+- выполняет полный матч-цикл;
+- в Tick опрашивает PlayerController 0: состояние ЛКМ между кадрами + line trace по Visibility к фишкам;
+  это устойчиво при GameAndUI и когда с PlayerController не приходят click-события на акторы;
+- выбор одной фишки одним кликом, обмен с соседней вторым кликом по соседу, удержание ЛКМ с «покачиванием»,
+  свайп от отпускания ЛКМ при пересечении InputMinSwipePixels из тюнинга;
+- ClearMouseGesture() сбрасывает состояние жеста (без переключения look input).
+
+Тюнинг:
+- ActiveTune(): FMatch3GameplayTune из Local Tune на акторе ИЛИ из UMatch3TunePreset (если назначен preset);
+- размеры поля (GridWidth/Height), CellSize, визуал линий, цвета и анимации камней, радиус клика и др. — в Match3Config.h.
 
 Структура FGridCell:
 - GemType: логический цвет/тип;
@@ -96,6 +101,15 @@
 Перечисление типов:
 - Empty, Red, Blue, Green, Yellow.
 
+2.6 FMatch3GameplayTune и UMatch3TunePreset
+Файлы:
+- Source/Match3/Public/Match3Config.h
+- Source/Match3/Private/Match3Config.cpp (модуль, если пустой — точка сборки для заголовка)
+
+Содержимое:
+- единая структура всех настраиваемых полей (сетка, ввод, trace, mesh/цвета камней, выделение, анимации);
+- UMatch3TunePreset : UDataAsset — пресет в Content (аналог ScriptableObject), переопределяет Local Tune на сетке.
+
 
 3) Игровой цикл по шагам
 ------------------------
@@ -105,8 +119,8 @@
 - Grid строит фон/линии и создает фишки.
 
 Шаг 2. Ввод игрока
-- PlayerController отслеживает drag мышью.
-- Разрешены только соседние обмены.
+- AMatch3Grid::Tick отслеживает ЛКМ и трассировку к фишкам.
+- Разрешены только соседние обмены (клик по соседу или свайп из удерживаемой фишки).
 
 Шаг 3. Проверка обмена
 - Grid делает swap временно.
@@ -138,18 +152,17 @@
 В AMatch3PlayerController:
 - один раз вычисляются Bounds поля;
 - pawn ставится над центром bounds;
-- pitch берется из CameraPitch.
+- pitch берется из CameraPitch;
+- SetIgnoreLookInput(true): без свободного вращения камеры мышью во время игры.
 
 
 5) Что можно настраивать в редакторе
 ------------------------------------
-5.1 У поля (AMatch3Grid):
-- GridWidth
-- GridHeight
-- CellSize
+5.1 У поля (AMatch3Grid) — категория Match3 | Tune:
+- TunePreset (Data Asset) ИЛИ Local Tune, пока preset пустой;
+- в структуре тюнинга: GridWidth, GridHeight, CellSize, линии, цвета, InputMinSwipePixels, PickLineTraceLengthUU и др.
 
 5.2 У контроллера (AMatch3PlayerController):
-- MinSwipePixels
 - CameraHeightMultiplier
 - CameraHeightOffset
 - CameraPitch
@@ -157,6 +170,9 @@
 5.3 У GameMode:
 - GridClass
 - AutoSpawnGridLocation
+
+5.4 Пресет (опционально):
+- Content: создать UMatch3TunePreset, заполнить Tune, назначить на AMatch3Grid в уровне.
 
 
 6) Частые проблемы и диагностика
@@ -178,6 +194,16 @@
 - параметры CameraPitch/Height в PlayerController;
 - что у Grid нормальные bounds (не нулевой размер поля).
 
+Проблема: при сохранении уровня World Partition / Open World — предупреждение Illegal reference to private object,
+пути вида /Temp/... StaticMesh на LandscapeMeshProxyComponent (HLOD).
+Причина: HLOD proxy ссылаются на временные меши из PIE/инстанца.
+Что делать: пересобрать HLOD, либо убрать проблемный ландшафт/HLOD, либо вести игровой уровень как простой (Empty),
+без тяжёлого OW-шаблона; не сохранять карту во время PIE.
+
+Проблема: в исходниках комментарии отображаются «ромбиками».
+Причина: смешение кодировок (UTF-8 vs системная).
+Что делать: в IDE сохранять исходники в UTF-8; часть комментариев в Grid/Gem переписана ASCII-английским для стабильного отображения.
+
 
 7) Куда развивать проект дальше
 --------------------------------
@@ -191,9 +217,26 @@
 
 8) Полезная памятка по архитектуре
 ----------------------------------
-- Логика поля живет в AMatch3Grid.
-- Ввод и камера живут в AMatch3PlayerController.
+- Логика поля и мышиный ввод живут в AMatch3Grid.
+- Только камера (и игнор look input) живут в AMatch3PlayerController.
 - Правила запуска уровня живут в AMatch3GameMode.
 - AMatch3Gem максимально "тонкий" визуальный объект.
-- Всегда сначала правим логику (Grid), потом визуал (Gem), потом UX (Controller).
+- Тюнинг в FMatch3GameplayTune / пресет; всегда сначала логика (Grid), потом визуал (Gem), потом UX.
 
+
+9) Журнал правок (подготовка к коммиту, 2026-05-16)
+---------------------------------------------------
+Сводка сессии:
+- Ввод: перенос опроса ЛКМ и raycast на AMatch3Grid::Tick; выделение, соседний свайп/клик, параметры в тюнинге.
+- Камера: SetIgnoreLookInput(true) в PlayerController; сетка больше не включает look обратно.
+- Тюнинг: FMatch3GameplayTune + UMatch3TunePreset в Match3Config.h; грид CellSize/размеры из тюнинга.
+- Комментарии: восстановлена читаемость (битая кириллица заменена на ASCII в части Grid/Gem); в шапке Grid/Config — краткий changelog.
+- Документация: обновлены разделы 2.2–2.6, 3–5, 6; этот раздел 9.
+- Контент: у пользователя могли добавляться/удаляться уровни (MainMap / GtidScene) — перед коммитом проверить намеренность удалений в git status.
+
+
+10) Контекст для Cursor / автолог
+---------------------------------
+- Локальные хуки при наличии пишут события в .cursor/context/CONTEXT_YYYY-MM-DD.txt.
+- Для людей основной вход — этот файл и README.md.
+- Правило агента: `.cursor/rules/match3-russian-comments.mdc` — комментарии в C++ модуля Match3 и проектная техдокументация на русском языке.

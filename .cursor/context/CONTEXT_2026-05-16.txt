@@ -1,0 +1,114 @@
+﻿# Session context — 2026-05-16 (prep for commit)
+
+## Code / architecture
+- AMatch3Grid::Tick: LMB + line trace input; selection, neighbor swap, swipe threshold from tune (InputMinSwipePixels).
+- AMatch3PlayerController: one-shot camera align over grid; BeginPlay SetIgnoreLookInput(true) — no Spectator mouse look during play.
+- Tuning: FMatch3GameplayTune + UMatch3TunePreset (Match3Config.h); ActiveTune() on grid.
+- ClearMouseGesture(): resets drag/selection gesture only (no SetIgnoreLookInput toggling).
+
+## Comments added this session
+- Match3Grid.cpp: file banner (2026-05) + Tick input-path note.
+- Match3PlayerController.cpp: comment at SetIgnoreLookInput.
+- Match3Config.h: English struct doc above FMatch3GameplayTune (tune usage).
+- Match3PlayerController.h: class doc updated (grid vs camera split).
+
+## Documentation
+- MATCH3_PROJECT_DOCUMENTATION.txt: sections 2.2–2.6, 3–6 revised; new §9 journal, §10 Cursor log note.
+- README.md: Controls + Tuning aligned with grid tune / controller camera.
+
+## Editor / content notes
+- Map save errors on OW+HLOD: see doc §6 (illegal /Temp StaticMesh refs).
+- Before commit: review git status for Content/ level renames or mass deletes (MainMap vs GtidScene).
+[00:53:20] EDIT EVENT (afterFileEdit)
+- (path not provided by event payload)
+
+[00:55:50] EDIT EVENT (afterFileEdit)
+- (path not provided by event payload)
+
+[00:55:50] EDIT EVENT (afterFileEdit)
+- (path not provided by event payload)
+
+[00:55:51] EDIT EVENT (afterFileEdit)
+- (path not provided by event payload)
+
+[00:55:53] EDIT EVENT (afterFileEdit)
+- (path not provided by event payload)
+
+[00:55:54] EDIT EVENT (afterFileEdit)
+- (path not provided by event payload)
+
+[00:55:55] EDIT EVENT (afterFileEdit)
+- (path not provided by event payload)
+
+[00:55:56] EDIT EVENT (afterFileEdit)
+- (path not provided by event payload)
+
+[00:55:57] EDIT EVENT (afterFileEdit)
+- (path not provided by event payload)
+
+[00:56:00] EDIT EVENT (afterFileEdit)
+- (path not provided by event payload)
+
+[00:56:01] EDIT EVENT (afterFileEdit)
+- (path not provided by event payload)
+
+[00:56:02] EDIT EVENT (afterFileEdit)
+- (path not provided by event payload)
+
+[00:56:04] EDIT EVENT (afterFileEdit)
+- (path not provided by event payload)
+
+[00:56:05] EDIT EVENT (afterFileEdit)
+- (path not provided by event payload)
+
+[00:56:06] EDIT EVENT (afterFileEdit)
+- (path not provided by event payload)
+
+[00:56:07] EDIT EVENT (afterFileEdit)
+- (path not provided by event payload)
+
+[00:56:09] EDIT EVENT (afterFileEdit)
+- (path not provided by event payload)
+
+[00:56:11] EDIT EVENT (afterFileEdit)
+- (path not provided by event payload)
+
+[00:56:13] EDIT EVENT (afterFileEdit)
+- (path not provided by event payload)
+
+[00:56:14] EDIT EVENT (afterFileEdit)
+- (path not provided by event payload)
+
+[00:56:16] EDIT EVENT (afterFileEdit)
+- (path not provided by event payload)
+
+[00:56:16] EDIT EVENT (afterFileEdit)
+- (path not provided by event payload)
+
+[00:56:16] EDIT EVENT (afterFileEdit)
+- (path not provided by event payload)
+
+[00:56:17] EDIT EVENT (afterFileEdit)
+- (path not provided by event payload)
+
+[00:56:17] EDIT EVENT (afterFileEdit)
+- (path not provided by event payload)
+
+[00:56:17] EDIT EVENT (afterFileEdit)
+- (path not provided by event payload)
+
+[00:56:18] EDIT EVENT (afterFileEdit)
+- (path not provided by event payload)
+
+[00:56:19] EDIT EVENT (afterFileEdit)
+- (path not provided by event payload)
+
+[00:56:24] EDIT EVENT (afterFileEdit)
+- (path not provided by event payload)
+
+[00:56:25] EDIT EVENT (afterFileEdit)
+- (path not provided by event payload)
+
+[00:56:42] EDIT EVENT (afterFileEdit)
+- (path not provided by event payload)
+

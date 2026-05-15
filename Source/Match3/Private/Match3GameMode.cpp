@@ -6,9 +6,9 @@
 
 AMatch3GameMode::AMatch3GameMode()
 {
-	// Контроллер обрабатывает mouse swipe / click логику.
+	// Контроллер: только камера над полем; ввод по фишкам — в AMatch3Grid::Tick.
 	PlayerControllerClass = AMatch3PlayerController::StaticClass();
-	// Чтобы в PIE была камера: летаете WASD + мышь, подлетаете к полю сверху.
+	// Камера Spectator (при желании WASD); поворот мышью отключён в PlayerController.
 	DefaultPawnClass = ASpectatorPawn::StaticClass();
 	// По умолчанию автоспавним C++ сетку.
 	GridClass = AMatch3Grid::StaticClass();

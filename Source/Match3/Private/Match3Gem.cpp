@@ -1,5 +1,6 @@
 #include "Match3Gem.h"
 
+#include "Match3Grid.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/SphereComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
@@ -8,7 +9,26 @@
 
 namespace
 {
-	static constexpr float ClickRadiusUU = 48.f;
+	/** BasicShapeMaterial и другие встроенные материалы по версиям UE называют цветовой вектор по-разному. */
+	void ApplyGemTint(UMaterialInstanceDynamic* MID, const FLinearColor& Color)
+	{
+		if (!MID)
+		{
+			return;
+		}
+
+		static const FName VectorNames[] = {
+			FName(TEXT("BaseColor")),
+			FName(TEXT("Color")),
+			FName(TEXT("Tint")),
+			FName(TEXT("Diffuse")),
+		};
+
+		for (const FName& N : VectorNames)
+		{
+			MID->SetVectorParameterValue(N, Color);
+		}
+	}
 }
 
 AMatch3Gem::AMatch3Gem()
@@ -19,22 +39,25 @@ AMatch3Gem::AMatch3Gem()
 
 	MeshComponent = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("MeshComponent"));
 	MeshComponent->SetupAttachment(RootComponent);
-	MeshComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	MeshComponent->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	MeshComponent->SetCollisionObjectType(ECC_WorldDynamic);
+	MeshComponent->SetCollisionResponseToAllChannels(ECR_Ignore);
+	MeshComponent->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
 
 	ClickCollision = CreateDefaultSubobject<USphereComponent>(TEXT("ClickCollision"));
 	ClickCollision->SetupAttachment(MeshComponent);
-	ClickCollision->SetSphereRadius(ClickRadiusUU);
 	ClickCollision->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 	ClickCollision->SetCollisionResponseToAllChannels(ECR_Ignore);
 	ClickCollision->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
 
-	// ������� 2D-�����: ���������� plane ������ sphere.
+	ApplyTune(FMatch3GameplayTune());
+
+	// Игра на плоскости: используем меш Plane из движка, а не сферу.
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> PlaneAsset(
 		TEXT("/Engine/BasicShapes/Plane.Plane"));
 	if (PlaneAsset.Succeeded())
 	{
 		MeshComponent->SetStaticMesh(PlaneAsset.Object);
-		MeshComponent->SetRelativeScale3D(FVector(0.85f, 0.85f, 1.f));
 	}
 
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> ShapeMat(
@@ -45,17 +68,125 @@ AMatch3Gem::AMatch3Gem()
 	}
 }
 
+void AMatch3Gem::OnConstruction(const FTransform& Transform)
+{
+	Super::OnConstruction(Transform);
+	RefreshTuneFromParentGrid();
+}
+
 void AMatch3Gem::BeginPlay()
 {
 	Super::BeginPlay();
-	// �������� ��������� ���� �� GemType ����� ������.
+	RefreshTuneFromParentGrid();
+	if (MeshComponent)
+	{
+		MeshBaseRelativeScale = MeshComponent->GetRelativeScale3D();
+	}
 	SetGemType(GemType);
+}
+
+void AMatch3Gem::ApplyTune(const FMatch3GameplayTune& Tune)
+{
+	GemTune = Tune;
+
+	if (ClickCollision)
+	{
+		ClickCollision->SetSphereRadius(GemTune.GemClickRadiusUU);
+	}
+
+	if (MeshComponent)
+	{
+		MeshComponent->SetRelativeScale3D(FVector(GemTune.GemPlaneScaleXY, GemTune.GemPlaneScaleXY, 1.f));
+	}
+
+	if (GemMID)
+	{
+		ApplyGemTint(GemMID, ResolveGemColor(GemType));
+	}
+}
+
+void AMatch3Gem::RefreshTuneFromParentGrid()
+{
+	if (AMatch3Grid* Grid = Cast<AMatch3Grid>(GetAttachParentActor()))
+	{
+		ApplyTune(Grid->GetResolvedTune());
+	}
+}
+
+void AMatch3Gem::UpdateSelectionVisual()
+{
+	if (!bIsSelected || !MeshComponent)
+	{
+		return;
+	}
+
+	static constexpr float TwoPi = 6.2831855f;
+	const float StepSec = 1.f / FMath::Max(1.f, GemTune.SelectionUpdateHz);
+	SelectionPhase += TwoPi * GemTune.SelectionPulseHz * StepSec;
+	if (SelectionPhase > TwoPi)
+	{
+		SelectionPhase -= TwoPi;
+	}
+
+	const float s = FMath::Sin(SelectionPhase);
+	const float c = FMath::Cos(SelectionPhase);
+	MeshComponent->SetRelativeLocation(FVector(
+		c * GemTune.SelectionWobbleXYUU,
+		s * GemTune.SelectionWobbleXYUU,
+		s * GemTune.SelectionBobAmplitudeUU));
+
+	const float ScaleMul = 1.f + s * GemTune.SelectionScaleAmp;
+	MeshComponent->SetRelativeScale3D(MeshBaseRelativeScale * ScaleMul);
+}
+
+void AMatch3Gem::StopSelectionAnimation()
+{
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(TimerHandle_SelectionIdle);
+	}
+
+	SelectionPhase = 0.f;
+	if (MeshComponent)
+	{
+		MeshComponent->SetRelativeLocation(FVector::ZeroVector);
+		MeshComponent->SetRelativeScale3D(MeshBaseRelativeScale);
+	}
+}
+
+void AMatch3Gem::StartSelectionAnimationIfNeeded()
+{
+	if (!bIsSelected || !bSelectionPressActive || !MeshComponent)
+	{
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	World->GetTimerManager().ClearTimer(TimerHandle_SelectionIdle);
+
+	const float StepSec = 1.f / FMath::Max(1.f, GemTune.SelectionUpdateHz);
+
+	FTimerDelegate Delegate;
+	Delegate.BindUObject(this, &AMatch3Gem::UpdateSelectionVisual);
+	World->GetTimerManager().SetTimer(
+		TimerHandle_SelectionIdle,
+		Delegate,
+		StepSec,
+		true);
 }
 
 void AMatch3Gem::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	SetSelected(false);
+
 	if (UWorld* World = GetWorld())
 	{
+		World->GetTimerManager().ClearTimer(TimerHandle_SelectionIdle);
 		World->GetTimerManager().ClearTimer(TimerHandle_SelectAnimation);
 		World->GetTimerManager().ClearTimer(TimerHandle_MoveAnimation);
 	}
@@ -63,20 +194,20 @@ void AMatch3Gem::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	Super::EndPlay(EndPlayReason);
 }
 
-FLinearColor AMatch3Gem::ColorForGemType(EGemType InType)
+FLinearColor AMatch3Gem::ResolveGemColor(EGemType InType) const
 {
 	switch (InType)
 	{
 	case EGemType::Red:
-		return FLinearColor(0.92f, 0.18f, 0.18f);
+		return GemTune.GemColorRed;
 	case EGemType::Blue:
-		return FLinearColor(0.18f, 0.45f, 0.95f);
+		return GemTune.GemColorBlue;
 	case EGemType::Green:
-		return FLinearColor(0.22f, 0.82f, 0.32f);
+		return GemTune.GemColorGreen;
 	case EGemType::Yellow:
-		return FLinearColor(0.95f, 0.86f, 0.20f);
+		return GemTune.GemColorYellow;
 	default:
-		return FLinearColor(0.65f, 0.65f, 0.65f);
+		return GemTune.GemColorEmpty;
 	}
 }
 
@@ -116,9 +247,7 @@ void AMatch3Gem::SetGemType(EGemType NewType)
 
 	if (GemMID)
 	{
-		// � �������� �������� �������� BaseColor.
-		static const FName BaseColorName(TEXT("BaseColor"));
-		GemMID->SetVectorParameterValue(BaseColorName, ColorForGemType(GemType));
+		ApplyGemTint(GemMID, ResolveGemColor(GemType));
 	}
 }
 
@@ -134,10 +263,52 @@ void AMatch3Gem::SetGridPosition(FIntPoint NewPosition)
 
 void AMatch3Gem::SetSelected(bool bSelected)
 {
-	if (bIsSelected != bSelected)
+	if (bIsSelected == bSelected)
 	{
-		bIsSelected = bSelected;
-		Highlight(bSelected);
+		return;
+	}
+
+	bIsSelected = bSelected;
+	Highlight(bSelected);
+
+	if (bSelected)
+	{
+		if (MeshComponent)
+		{
+			MeshBaseRelativeScale = MeshComponent->GetRelativeScale3D();
+		}
+		SelectionPhase = 0.f;
+		bSelectionPressActive = false;
+		StopSelectionAnimation();
+	}
+	else
+	{
+		bSelectionPressActive = false;
+		StopSelectionAnimation();
+	}
+}
+
+void AMatch3Gem::SetSelectionPressActive(bool bPressActive)
+{
+	if (bSelectionPressActive == bPressActive)
+	{
+		return;
+	}
+
+	bSelectionPressActive = bPressActive;
+	if (!bIsSelected || !MeshComponent)
+	{
+		return;
+	}
+
+	if (bSelectionPressActive)
+	{
+		SelectionPhase = 0.f;
+		StartSelectionAnimationIfNeeded();
+	}
+	else
+	{
+		StopSelectionAnimation();
 	}
 }
 
@@ -160,7 +331,7 @@ void AMatch3Gem::Highlight(bool bEnable)
 	if (bEnable)
 	{
 		MeshComponent->SetRenderCustomDepth(true);
-		MeshComponent->SetCustomDepthStencilValue(1);
+		MeshComponent->SetCustomDepthStencilValue(static_cast<int32>(GemTune.CustomDepthStencilValue));
 	}
 	else
 	{
@@ -175,9 +346,8 @@ void AMatch3Gem::PlaySelectAnimation()
 		return;
 	}
 
-	// ���������� feedback: ������� scale up � ������� �� �������.
 	const FVector OriginalScale = GetActorScale3D();
-	const FVector TargetScale = OriginalScale * 1.12f;
+	const FVector TargetScale = OriginalScale * GemTune.SelectAnimScaleMultiplier;
 	SetActorScale3D(TargetScale);
 
 	if (UWorld* World = GetWorld())
@@ -190,7 +360,11 @@ void AMatch3Gem::PlaySelectAnimation()
 					SetActorScale3D(OriginalScale);
 				}
 			});
-		World->GetTimerManager().SetTimer(TimerHandle_SelectAnimation, TimerDelegate, 0.08f, false);
+		World->GetTimerManager().SetTimer(
+			TimerHandle_SelectAnimation,
+			TimerDelegate,
+			GemTune.SelectAnimDurationSec,
+			false);
 	}
 }
 
@@ -209,7 +383,7 @@ void AMatch3Gem::PlayMatchAnimation()
 					bIsMoving = false;
 				}
 			},
-			0.05f,
+			GemTune.MatchBusyDurationSec,
 			false);
 	}
 }
@@ -225,7 +399,7 @@ void AMatch3Gem::PlayMoveAnimation(FVector TargetPosition, float Duration)
 	MoveAnimElapsed = 0.f;
 
 	const FVector StartPosition = GetActorLocation();
-	const float StepTime = 1.f / 60.f;
+	const float StepTime = 1.f / FMath::Max(1.f, GemTune.MoveAnimTickHz);
 
 	if (UWorld* World = GetWorld())
 	{

@@ -1,0 +1,3 @@
+﻿[18:07:07] EDIT EVENT (afterFileEdit)
+- (path not provided by event payload)
+
